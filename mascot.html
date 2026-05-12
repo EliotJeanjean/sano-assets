@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html style="background:transparent;">
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body style="background:transparent;">
+  <canvas id="mascot-3d"></canvas>
+  <script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  var canvas = document.getElementById('mascot-3d');
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.sortObjects = true;
+  renderer.setClearColor(0x000000, 0);
+  renderer.setSize(600, 600, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100);
+  camera.position.set(0, 0, 5.5);
+  scene.add(new THREE.AmbientLight(0xffffff, 1.4));
+  var dir = new THREE.DirectionalLight(0xffffff, 2.2); dir.position.set(2, 4, 3); scene.add(dir);
+  var fill = new THREE.DirectionalLight(0xffd0c0, 0.7); fill.position.set(-2, -1, 2); scene.add(fill);
+
+  var model = null;
+  var pivot = new THREE.Group(); scene.add(pivot);
+  var rotTarget = { x: 0, y: 0 }, rotCur = { x: 0, y: 0 };
+  var trackingEnabled = true;
+  var MOUTH_POS = new THREE.Vector3(0.0, 0.80, 0.30);
+
+  new GLTFLoader().load('MODEL.glb', function(gltf) {
+    model = gltf.scene;
+    pivot.add(model);
+    model.updateMatrixWorld(true);
+    var box = new THREE.Box3().setFromObject(model);
+    var size = box.getSize(new THREE.Vector3()).length();
+    if (size === 0) size = 1;
+    model.scale.setScalar(2.0 / size);
+    model.updateMatrixWorld(true);
+    var box2 = new THREE.Box3().setFromObject(model);
+    model.position.sub(box2.getCenter(new THREE.Vector3()));
+    model.updateMatrixWorld(true);
+    var box3 = new THREE.Box3().setFromObject(model);
+    MOUTH_POS.set((box3.max.x + box3.min.x) * 0.5, box3.max.y * 0.88, box3.max.z * 0.55);
+    model.renderOrder = 0;
+    model.traverse(function(child) { if (child.isMesh) child.renderOrder = 0; });
+    trackingEnabled = true;
+    animate();
+  }, undefined, function(err) { console.error('GLB load error', err); });
+
+  // postMessage bridge — reçoit les commandes du parent BC
+  window.addEventListener('message', function(e) {
+    if (!e.data || !e.data.type) return;
+    if (e.data.type === 'mousemove') {
+      if (!trackingEnabled) return;
+      rotTarget.y = e.data.x;
+      rotTarget.x = e.data.y;
+    }
+    if (e.data.type === 'disableTracking') { trackingEnabled = false; rotTarget.x = 0; rotTarget.y = 0; }
+    if (e.data.type === 'enableTracking')  { trackingEnabled = true;  rotTarget.x = 0; rotTarget.y = 0; rotCur.x = 0; rotCur.y = 0; }
+    if (e.data.type === 'setBubbleActive') { bubbleActive = e.data.value; }
+  });
+
+  var bubbleGeo = new THREE.SphereGeometry(1, 48, 48);
+  var _bVert = `varying vec3 vNormal,vViewDir;void main(){vec4 mv=modelViewMatrix*vec4(position,1.);vNormal=normalize(normalMatrix*normal);vViewDir=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}`;
+  var _bFrag = `uniform float uOpacity;uniform vec3 uColor;varying vec3 vNormal,vViewDir;void main(){float f=pow(1.-abs(dot(vNormal,vViewDir)),1.1);float h=f*2.5;vec3 i=vec3(.45+.55*sin(h*3.14159),.65+.35*sin(h*3.14159+2.094),.95+.05*sin(h*3.14159+4.189));vec3 L=normalize(vec3(1.,2.,1.5));float sp=pow(max(dot(vNormal,normalize(L+vViewDir)),0.),140.);vec3 c=mix(uColor,i,f*.92)+vec3(sp*1.4);gl_FragColor=vec4(c,clamp((f+sp*.9)*uOpacity,0.,1.));}`;
+  function makeBubbleMat() { return new THREE.ShaderMaterial({ vertexShader:_bVert, fragmentShader:_bFrag, uniforms:{uOpacity:{value:1.},uColor:{value:new THREE.Color(0xd0eeff)}}, transparent:true, depthWrite:false, depthTest:true, side:THREE.DoubleSide }); }
+
+  var bubbles = [], bubbleTimer = 0, bubbleActive = false;
+  var nextBubble = 30 + Math.floor(Math.random() * 20);
+
+  function spawnBubble() {
+    var rnd = Math.random();
+    var r = rnd < 0.55 ? 0.040 + Math.random()*0.045 : rnd < 0.85 ? 0.090 + Math.random()*0.080 : 0.160 + Math.random()*0.110;
+    var mesh = new THREE.Mesh(bubbleGeo, makeBubbleMat());
+    mesh.scale.setScalar(r);
+    mesh.position.copy(MOUTH_POS);
+    mesh.position.x += (Math.random()-0.5)*0.12; mesh.position.y += (Math.random()-0.5)*0.08; mesh.position.z += (Math.random()-0.5)*0.10;
+    mesh.renderOrder = 5; pivot.add(mesh);
+    var speed = 0.003 + Math.random()*0.003, az = Math.random()*Math.PI*2, elev = (Math.random()*100-30)*Math.PI/180;
+    bubbles.push({ mesh:mesh, age:0, life:Math.round(160+Math.random()*100), vx:Math.cos(elev)*Math.cos(az)*speed, vy:Math.sin(elev)*speed+0.001, vz:Math.cos(elev)*Math.sin(az)*speed*0.5, phase:Math.random()*Math.PI*2, radius:r });
+  }
+
+  function updateBubbles() {
+    if (bubbleActive) { bubbleTimer++; if (bubbleTimer >= nextBubble) { bubbleTimer=0; nextBubble=30+Math.floor(Math.random()*20); spawnBubble(); } }
+    for (var i = bubbles.length-1; i >= 0; i--) {
+      var b = bubbles[i]; b.age++;
+      var t = b.age/b.life;
+      b.mesh.position.x += b.vx + Math.sin(b.age*0.06+b.phase)*0.0004;
+      b.mesh.position.y += b.vy; b.mesh.position.z += b.vz;
+      b.vx *= 0.992; b.vy *= 0.994; b.vz *= 0.992;
+      b.mesh.scale.setScalar(b.radius*(1+t*0.20));
+      b.mesh.material.uniforms.uOpacity.value = Math.max(0, t < 0.08 ? t/0.08 : t > 0.82 ? (1-t)/0.18 : 1.0);
+      if (b.age >= b.life) { pivot.remove(b.mesh); b.mesh.material.dispose(); bubbles.splice(i,1); }
+    }
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    rotCur.x += (rotTarget.x - rotCur.x) * 0.09;
+    rotCur.y += (rotTarget.y - rotCur.y) * 0.09;
+    pivot.rotation.x = rotCur.x;
+    pivot.rotation.y = rotCur.y;
+    if (model) updateBubbles();
+    // Envoie les valeurs de rotation au parent pour l'effet parallaxe splash-fx
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: 'rotCur', x: rotCur.x, y: rotCur.y }, '*');
+    }
+    renderer.render(scene, camera);
+  }
+  </script>
+</body>
+</html>
